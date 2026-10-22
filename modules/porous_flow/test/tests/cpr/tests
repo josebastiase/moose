@@ -1,0 +1,34 @@
+[Tests]
+  design = 'CPRLayoutCheck.md'
+  issues = '#00000'
+
+  [cpr]
+    requirement = 'The system shall provide a constrained-pressure-residual (CPR) preconditioner that gives the same results as the default preconditioners'
+    [two_phase]
+      type = CSVDiff
+      input = cpr_2phase.i
+      csvdiff = cpr_2phase_pp_0011.csv
+      detail = 'for a two-phase model with finite elements,'
+    []
+    [two_phase_fv]
+      type = CSVDiff
+      input = cpr_2phase_fv.i
+      csvdiff = cpr_2phase_fv_pp_0011.csv
+      detail = 'for a two-phase model with finite volumes, and'
+    []
+    [three_components]
+      type = CSVDiff
+      input = cpr_3comp.i
+      csvdiff = cpr_3comp.csv
+      detail = 'for a three-component model.'
+    []
+  []
+
+  [layout_error]
+    type = RunException
+    input = cpr_2phase.i
+    cli_args = 'Variables/extra/family=SCALAR Variables/extra/order=FIRST ScalarKernels/extra/type=ODETimeDerivative ScalarKernels/extra/variable=extra'
+    expect_err = 'the nonlinear system has dofs that belong to no node or element'
+    requirement = 'The system shall report an error if the dofs of the nonlinear system cannot be grouped per node or element, as the CPR preconditioner requires.'
+  []
+[]

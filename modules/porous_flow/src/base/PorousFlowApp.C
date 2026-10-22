@@ -14,6 +14,7 @@
 #include "MooseSyntax.h"
 #include "FluidPropertiesApp.h"
 #include "ChemicalReactionsApp.h"
+#include "pccpr.h"
 
 InputParameters
 PorousFlowApp::validParams()
@@ -90,6 +91,12 @@ PorousFlowApp::registerAll(Factory & f, ActionFactory & af, Syntax & syntax)
   addTaskDependency("add_master_action_material", "add_joiners");
 
   registerSyntaxTask("PorousFlowAddMaterialJoiner", "Materials", "add_joiners");
+
+  // Register the CPR (constrained pressure residual) preconditioner with PETSc, so that inputs
+  // can use -pc_type cpr.  This is called after PETSc has been initialised (in the app
+  // constructor), and registering twice is harmless
+  if (PCCPRRegister())
+    ::mooseError("PorousFlowApp: failed to register the CPR preconditioner with PETSc");
 }
 
 extern "C" void
