@@ -90,7 +90,8 @@
 
 [DiracKernels]
   [bh_gas]
-    type = PorousFlowConstrainedPeacemanBorehole
+    type = PorousFlowPeacemanBorehole
+    control = rate
     variable = sgas
     SumQuantityUO = bh_gas_outflow
     point_file = borehole.bh

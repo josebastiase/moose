@@ -3,7 +3,7 @@
 #
 # A 20 x 20 x 30 m box of 5 m cubes holds water at hydrostatic pressure.  A vertical borehole with
 # three completions at element centres produces 1 kg/s until t = 50 s and then injects 0.5 kg/s.
-# PorousFlowConstrainedPeacemanBorehole solves for the bottom-hole pressure (the scalar bhp) that
+# PorousFlowPeacemanBorehole (control = rate) solves for the bottom-hole pressure (the scalar bhp) that
 # delivers that rate.
 #
 # The mesh is the finite-volume grid, so the pore volume is the same, but the porepressure lives
@@ -66,7 +66,8 @@
 
 [DiracKernels]
   [bh]
-    type = PorousFlowConstrainedPeacemanBorehole
+    type = PorousFlowPeacemanBorehole
+    control = rate
     variable = pp
     SumQuantityUO = bh_outflow
     point_file = borehole.bh

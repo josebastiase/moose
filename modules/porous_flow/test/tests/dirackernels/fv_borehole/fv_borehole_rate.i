@@ -1,7 +1,7 @@
-# FVPorousFlowPeacemanBorehole with control = rate: single phase, three borehole points in
+# PorousFlowPeacemanBorehole with control = rate: single phase, three borehole points in
 # different cells.  The borehole produces 1 kg/s until t = 50 s, then injects 0.5 kg/s, and the
 # bottomhole pressure (the scalar variable bhp) is computed.  The results agree with MRST: see the
-# FVPorousFlowPeacemanBorehole documentation
+# PorousFlowPeacemanBorehole documentation
 [Mesh]
   type = GeneratedMesh
   dim = 3
@@ -57,16 +57,15 @@
 
 [DiracKernels]
   [bh]
-    type = FVPorousFlowPeacemanBorehole
+    type = PorousFlowPeacemanBorehole
     variable = pp
-    control = rate
-    bottom_p = bhp
-    rate = rate
     point_file = fv_borehole.bh
     unit_weight = '0 0 -1E4'
-    character = 1
     use_mobility = true
-    allow_crossflow = true
+    control = rate
+    bottom_hole_pressure = bhp
+    rate = rate
+    SumQuantityUO = bh_outflow
   []
 []
 
@@ -80,6 +79,9 @@
 []
 
 [UserObjects]
+  [bh_outflow]
+    type = PorousFlowSumQuantity
+  []
   [dictator]
     type = PorousFlowDictator
     porous_flow_vars = 'pp'

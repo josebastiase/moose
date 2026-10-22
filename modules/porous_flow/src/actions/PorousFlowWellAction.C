@@ -80,7 +80,7 @@ PorousFlowWellAction::act()
       mooseError(name(),
                  ": a PorousFlowProductionWell is a deliverability-curve line sink, which is only "
                  "available for finite-element variables.  With finite-volume variables use a "
-                 "FVPorousFlowPeacemanBorehole DiracKernel instead");
+                 "PorousFlowPeacemanBorehole DiracKernel instead");
     addProductionWell();
   }
   // NOTE: no reason to catch unknown types here - MOOSE will catch that much earlier
@@ -233,10 +233,11 @@ PorousFlowWellAction::addInjectionWell()
 
   if (solvesForBottomHolePressure())
   {
-    if (finiteVolume())
-      addConstrainedInjectionWellFV(rate, mass_fractions);
-    else
-      addConstrainedInjectionWell(rate, mass_fractions);
+    if (finiteVolume() && obj_pars.isParamValid("temperature"))
+      mooseError(nm,
+                 ": a nonisothermal well with 'bhp_max' is not available for finite-volume "
+                 "variables");
+    addConstrainedInjectionWell(rate, mass_fractions);
     return;
   }
 
@@ -318,77 +319,6 @@ PorousFlowWellAction::finiteVolume() const
 }
 
 void
-PorousFlowWellAction::addConstrainedInjectionWellFV(const FunctionName & rate,
-                                                    const std::vector<Real> & mass_fractions)
-{
-  const InputParameters & obj_pars = getObjectParams();
-  const std::string nm = name();
-
-  if (obj_pars.isParamValid("point"))
-    mooseError(nm,
-               ": a well that respects 'bhp_max' is modelled by a Peaceman borehole, whose well "
-               "constant depends on the radius of the hole.  Give the completions with "
-               "'point_file' or 'line_base', whose first entry per completion is that radius, "
-               "rather than with 'point'.");
-  if (obj_pars.isParamValid("temperature"))
-    mooseError(nm,
-               ": a nonisothermal well with 'bhp_max' is not available for finite-volume "
-               "variables");
-
-  // [Wells] states rates positive for injection, the borehole states them positive for production
-  const FunctionName injection_rate = nm + "_rate_injected";
-  {
-    InputParameters pars = _factory.getValidParams("ParsedFunction");
-    pars.set<std::string>("expression") = "-q";
-    pars.set<std::vector<std::string>>("symbol_names") = {"q"};
-    pars.set<std::vector<std::string>>("symbol_values") = {rate};
-    _problem->addFunction("ParsedFunction", injection_rate, pars);
-  }
-
-  const auto & dictator = _problem->getUserObject<PorousFlowDictator>(
-      obj_pars.get<UserObjectName>("PorousFlowDictator"));
-  const unsigned int num_phases = dictator.numPhases();
-  const unsigned int injection_phase = obj_pars.get<unsigned int>("injection_phase");
-  if (injection_phase >= num_phases)
-    mooseError(nm,
-               ": 'injection_phase' is ",
-               injection_phase,
-               " but the simulation has ",
-               num_phases,
-               " fluid phases");
-
-  // One FVPorousFlowPeacemanBorehole per fluid phase and component, as for the finite-element
-  // boreholes.  They share the bottom-hole pressure, solve for it to deliver the rate (or hold
-  // bhp_max), and decide that together.  Injecting completions inject the injection phase with
-  // the injected composition; completions with crossflow produce the cell's fluid
-  const std::string class_name = "FVPorousFlowPeacemanBorehole";
-  for (const auto ph : make_range(num_phases))
-    for (const auto i : make_range(_num_components))
-    {
-      InputParameters pars = _factory.getValidParams(class_name);
-      setLineGeometry(pars);
-      pars.set<UserObjectName>("PorousFlowDictator") =
-          obj_pars.get<UserObjectName>("PorousFlowDictator");
-      pars.set<NonlinearVariableName>("variable") = componentVariable(i);
-      pars.set<unsigned int>("fluid_phase") = ph;
-      pars.set<unsigned int>("mass_fraction_component") = i;
-      pars.set<FunctionName>("injected_mass_fraction") = Moose::stringify(mass_fractions[i]);
-      pars.set<bool>("use_mobility") = true;
-      pars.set<MooseEnum>("control") = "rate";
-      pars.set<std::vector<VariableName>>("bottom_p") = {bottomHolePressureVariable()};
-      pars.set<FunctionName>("rate") = injection_rate;
-      pars.set<FunctionName>("bhp_max") = Moose::stringify(obj_pars.get<Real>("bhp_max"));
-      pars.set<FunctionName>("character") = "1";
-      pars.set<bool>("allow_crossflow") = true;
-      pars.set<unsigned int>("injection_phase") = injection_phase;
-      pars.set<RealVectorValue>("unit_weight") =
-          obj_pars.get<Real>("wellbore_density") * obj_pars.get<RealVectorValue>("gravity");
-      _problem->addDiracKernel(
-          class_name, nm + "_fv_" + Moose::stringify(ph) + "_" + Moose::stringify(i), pars);
-    }
-}
-
-void
 PorousFlowWellAction::setLineGeometry(InputParameters & pars) const
 {
   const InputParameters & obj_pars = getObjectParams();
@@ -427,7 +357,8 @@ PorousFlowWellAction::addConstrainedInjectionWell(const FunctionName & rate,
     _problem->addFunction("ParsedFunction", injection_rate, pars);
   }
 
-  const std::string class_name = "PorousFlowConstrainedPeacemanBorehole";
+  // The same object for finite-element and finite-volume variables: it detects which
+  const std::string class_name = "PorousFlowPeacemanBorehole";
 
   // Every borehole of this well shares one bottom-hole pressure, and each needs its own
   // PorousFlowSumQuantity, which accumulates and so cannot be shared
@@ -437,7 +368,10 @@ PorousFlowWellAction::addConstrainedInjectionWell(const FunctionName & rate,
     setLineGeometry(pars);
     pars.set<UserObjectName>("PorousFlowDictator") =
         obj_pars.get<UserObjectName>("PorousFlowDictator");
+    pars.set<MooseEnum>("control") = "rate";
     pars.set<std::vector<VariableName>>("bottom_hole_pressure") = {bottomHolePressureVariable()};
+    // The injected stream is carried at the density of the injection phase
+    pars.set<unsigned int>("fluid_phase") = obj_pars.get<unsigned int>("injection_phase");
     // An injector weighted by the mobility of a phase absent from the reservoir has no injectivity
     // at all and can never begin to flow, so the total mobility is the only usable choice here
     pars.set<bool>("use_mobility") = true;

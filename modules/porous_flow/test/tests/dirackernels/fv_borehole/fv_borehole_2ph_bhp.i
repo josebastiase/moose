@@ -1,9 +1,7 @@
-# FVPorousFlowPeacemanBorehole with control = bhp: water and a CO2-like gas (immiscible), with
-# one DiracKernel per phase and component.  The reservoir is initially full of water and gas is
-# injected with a bottomhole pressure of 10.15 MPa (the injecting borehole points use
-# injection_phase = 1).  The production test sets an initial gas saturation of 0.3 and a
-# bottomhole pressure of 9.98 MPa, which produces both phases.  The results agree with MRST: see
-# the FVPorousFlowPeacemanBorehole documentation
+# PorousFlowPeacemanBorehole with control = bhp and finite-volume variables: water and a CO2-like
+# gas (immiscible).  The reservoir is initially full of water and gas is injected with a bottom-hole
+# pressure of 10.15 MPa.  The results agree with MRST: see the PorousFlowPeacemanBorehole
+# documentation
 [Mesh]
   type = GeneratedMesh
   dim = 3
@@ -77,37 +75,18 @@
 []
 
 [DiracKernels]
-  # One DiracKernel per fluid phase and component, as PorousFlowPeacemanBorehole.  The mass
-  # fractions of water in the gas and of gas in the water are zero, so those two are not needed
-  [bh_water]
-    type = FVPorousFlowPeacemanBorehole
-    variable = ppwater
-    SumQuantityUO = bh_water_outflow
-    fluid_phase = 0
-    mass_fraction_component = 0
-    control = bhp
-    bottom_p_or_t = bottom_p
+  [bh_gas]
+    type = PorousFlowPeacemanBorehole
+    variable = sgas
     point_file = fv_borehole.bh
     unit_weight = '0 0 -1E4'
-    character = 1
     use_mobility = true
-    allow_crossflow = true
-    injection_phase = 1
-  []
-  [bh_gas]
-    type = FVPorousFlowPeacemanBorehole
-    variable = sgas
+    bottom_p_or_t = bottom_p
+    character = -1
     SumQuantityUO = bh_gas_outflow
     fluid_phase = 1
     mass_fraction_component = 1
-    control = bhp
-    bottom_p_or_t = bottom_p
-    point_file = fv_borehole.bh
-    unit_weight = '0 0 -1E4'
-    character = 1
-    use_mobility = true
-    allow_crossflow = true
-    injection_phase = 1
+    mobility_type = total
   []
 []
 
@@ -121,9 +100,6 @@
   [pc]
     type = PorousFlowCapillaryPressureConst
     pc = 0
-  []
-  [bh_water_outflow]
-    type = PorousFlowSumQuantity
   []
   [bh_gas_outflow]
     type = PorousFlowSumQuantity
@@ -205,10 +181,6 @@
     function = bottom_p
   []
   # Mass that left the porous medium through the borehole during the time step
-  [bh_water_outflow_mass]
-    type = PorousFlowPlotQuantity
-    uo = bh_water_outflow
-  []
   [bh_gas_outflow_mass]
     type = PorousFlowPlotQuantity
     uo = bh_gas_outflow

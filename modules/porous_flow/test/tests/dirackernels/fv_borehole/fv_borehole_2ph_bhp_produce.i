@@ -1,4 +1,7 @@
-# FV two-phase MRST case (gas injection, 1 kg/s) with Chris's PorousFlowConstrainedPeacemanBorehole (rate control)
+# PorousFlowPeacemanBorehole with control = bhp and finite-volume variables: water and a CO2-like
+# gas (immiscible).  The reservoir initially has a uniform gas saturation of 0.3, and the borehole
+# produces water and gas with a bottom-hole pressure of 9.98 MPa.  The results agree with MRST: see
+# the PorousFlowPeacemanBorehole documentation
 [Mesh]
   type = GeneratedMesh
   dim = 3
@@ -18,17 +21,12 @@
 []
 
 [Variables]
-  [bhp]
-    family = SCALAR
-    order = FIRST
-    initial_condition = 1.0025E7
-  []
   [ppwater]
     type = MooseVariableFVReal
   []
   [sgas]
     type = MooseVariableFVReal
-    initial_condition = 0
+    initial_condition = 0.3
   []
 []
 
@@ -77,25 +75,29 @@
 []
 
 [DiracKernels]
-  [bh_gas]
-    type = PorousFlowConstrainedPeacemanBorehole
-    variable = sgas
-    SumQuantityUO = bh_gas_outflow
+  [bh_water]
+    type = PorousFlowPeacemanBorehole
+    variable = ppwater
     point_file = fv_borehole.bh
-    fluid_phase = 1
-    mass_fraction_component = 1
     unit_weight = '0 0 -1E4'
     use_mobility = true
-    mobility_type = total
-    bottom_hole_pressure = bhp
-    rate = rate
+    bottom_p_or_t = bottom_p
+    character = 1
+    SumQuantityUO = bh_water_outflow
+    fluid_phase = 0
+    mass_fraction_component = 0
   []
-[]
-
-[ScalarKernels]
-  [bhp]
-    type = NullScalarKernel
-    variable = bhp
+  [bh_gas]
+    type = PorousFlowPeacemanBorehole
+    variable = sgas
+    point_file = fv_borehole.bh
+    unit_weight = '0 0 -1E4'
+    use_mobility = true
+    bottom_p_or_t = bottom_p
+    character = 1
+    SumQuantityUO = bh_gas_outflow
+    fluid_phase = 1
+    mass_fraction_component = 1
   []
 []
 
@@ -106,12 +108,15 @@
     number_fluid_phases = 2
     number_fluid_components = 2
   []
-  [bh_gas_outflow]
-    type = PorousFlowSumQuantity
-  []
   [pc]
     type = PorousFlowCapillaryPressureConst
     pc = 0
+  []
+  [bh_water_outflow]
+    type = PorousFlowSumQuantity
+  []
+  [bh_gas_outflow]
+    type = PorousFlowSumQuantity
   []
 []
 
@@ -178,17 +183,25 @@
 []
 
 [Functions]
-  [rate]
-    # kg/s, positive for production
+  [bottom_p]
     type = ParsedFunction
-    expression = '-1'
+    expression = '9.98E6'
   []
 []
 
 [Postprocessors]
-  [target_rate]
+  [p_bot]
     type = FunctionValuePostprocessor
-    function = rate
+    function = bottom_p
+  []
+  # Mass that left the porous medium through the borehole during the time step
+  [bh_water_outflow_mass]
+    type = PorousFlowPlotQuantity
+    uo = bh_water_outflow
+  []
+  [bh_gas_outflow_mass]
+    type = PorousFlowPlotQuantity
+    uo = bh_gas_outflow
   []
   # Mass rates leaving the porous medium, from the change in the fluid mass of each component
   [water_mass]

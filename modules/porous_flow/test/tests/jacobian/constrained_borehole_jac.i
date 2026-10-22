@@ -227,7 +227,8 @@
 
 [DiracKernels]
   [dirac0]
-    type = PorousFlowConstrainedPeacemanBorehole
+    type = PorousFlowPeacemanBorehole
+    control = rate
     fluid_phase = 0
     variable = ppwater
     point_file = one_point.bh

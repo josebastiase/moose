@@ -87,7 +87,6 @@ PorousFlowDependencies::PorousFlowDependencies()
 
   // Dirac kernel dependencies
   _deps.insertDependency("PorousFlowPeacemanBorehole", "PorousFlowLineSink");
-  _deps.insertDependency("PorousFlowConstrainedPeacemanBorehole", "PorousFlowPeacemanBorehole");
   _deps.insertDependency("PorousFlowPolyLineSink", "PorousFlowLineSink");
 
   _deps.insertDependency("PorousFlowLineSink", "pressure_saturation_qp");

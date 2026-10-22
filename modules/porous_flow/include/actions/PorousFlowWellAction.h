@@ -79,10 +79,6 @@ protected:
   /// Whether the fluid-component variables are finite-volume variables
   bool finiteVolume() const;
 
-  /// Adds the finite-volume counterpart of addConstrainedInjectionWell
-  void addConstrainedInjectionWellFV(const FunctionName & rate,
-                                     const std::vector<Real> & mass_fractions);
-
   /**
    * A ParsedFunction that is 1 while the well is open and 0 while it is shut, combining the
    * start_time/end_time window with the shut_if condition.  Returns an empty name if the well is

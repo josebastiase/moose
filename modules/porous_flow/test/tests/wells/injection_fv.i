@@ -1,9 +1,9 @@
 # Finite-volume injection well with a pressure limit.  Water and a CO2-like gas (immiscible) in a
 # 20 x 20 x 30 m box of 5 m cells; gas is injected at 1 kg/s through a vertical well with three
 # completions.  Because the variables are finite-volume variables and bhp_max is given, [Wells]
-# builds FVPorousFlowPeacemanBorehole DiracKernels that solve for the bottom-hole pressure
+# builds PorousFlowPeacemanBorehole DiracKernels (control = rate) that solve for the bottom-hole pressure
 # (inj_bhp).  With the default bhp_max the limit is never reached, and the results are those of
-# the FVPorousFlowPeacemanBorehole test fv_borehole_2ph_rate.i, which agree with MRST.  The tests
+# the PorousFlowPeacemanBorehole test fv_borehole_2ph_rate.i, which agree with MRST.  The tests
 # also lower bhp_max so that the well has to hold it.
 [Mesh]
   type = GeneratedMesh

@@ -10,6 +10,7 @@
 #include "PorousFlowAddMaterialAction.h"
 #include "AddBCAction.h"
 #include "AddDiracKernelAction.h"
+#include "AddVariableAction.h"
 #include "AddKernelAction.h"
 #include "AddMaterialAction.h"
 #include "AddPostprocessorAction.h"
@@ -139,10 +140,30 @@ PorousFlowAddMaterialAction::createDependencyList()
   for (auto & bc : bcs)
     _dependency_list.insert(bc->getMooseObjectType());
 
-  // Unique list of Dirac kernels added in input file
+  // Unique list of Dirac kernels added in input file.  A Dirac kernel acting on a finite-volume
+  // variable (eg PorousFlowPeacemanBorehole in a finite-volume model) uses the quadpoint AD
+  // materials that the finite-volume kernels need anyway, never the nodal ones, so it adds nothing
   auto diracs = _awh.getActions<AddDiracKernelAction>();
   for (auto & dirac : diracs)
+  {
+    const auto & dirac_pars = dirac->getObjectParams();
+    if (dirac_pars.isParamValid("variable"))
+    {
+      // The problem does not exist yet, so look at how the variable was declared
+      const auto & var_name = dirac_pars.get<NonlinearVariableName>("variable");
+      bool fv = false;
+      for (const auto * var : _awh.getActions<AddVariableAction>())
+        if (var->name() == var_name)
+        {
+          const auto & var_pars = var->getObjectParams();
+          fv = var->getMooseObjectType().find("FV") != std::string::npos ||
+               (var_pars.isParamValid("fv") && var_pars.get<bool>("fv"));
+        }
+      if (fv)
+        continue;
+    }
     _dependency_list.insert(dirac->getMooseObjectType());
+  }
 }
 
 bool

@@ -1,7 +1,7 @@
-# FVPorousFlowPeacemanBorehole with control = bhp: single phase, three borehole points in
+# PorousFlowPeacemanBorehole with control = bhp: single phase, three borehole points in
 # different cells.  The borehole produces with a bottomhole pressure of 9.95 MPa until t = 50 s,
 # then injects with 10.05 MPa.  The outflow is recorded in a PorousFlowSumQuantity.  The results
-# agree with MRST: see the FVPorousFlowPeacemanBorehole documentation
+# agree with MRST: see the PorousFlowPeacemanBorehole documentation
 [Mesh]
   type = GeneratedMesh
   dim = 3
@@ -50,16 +50,14 @@
 
 [DiracKernels]
   [bh]
-    type = FVPorousFlowPeacemanBorehole
+    type = PorousFlowPeacemanBorehole
     variable = pp
-    control = bhp
-    bottom_p_or_t = bottom_p
-    SumQuantityUO = bh_outflow
     point_file = fv_borehole.bh
     unit_weight = '0 0 -1E4'
-    character = 1
     use_mobility = true
-    allow_crossflow = true
+    bottom_p_or_t = bottom_p
+    character = character
+    SumQuantityUO = bh_outflow
   []
 []
 
@@ -116,6 +114,11 @@
 []
 
 [Functions]
+  [character]
+    # producer, then injector
+    type = ParsedFunction
+    expression = 'if(t <= 50, 1, -1)'
+  []
   [bottom_p]
     type = ParsedFunction
     expression = 'if(t <= 50, 9.95E6, 1.005E7)'

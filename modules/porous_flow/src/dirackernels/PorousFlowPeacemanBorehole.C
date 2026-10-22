@@ -8,6 +8,9 @@
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
 #include "PorousFlowPeacemanBorehole.h"
+#include "MooseVariableScalar.h"
+#include "NonlinearSystemBase.h"
+#include "Assembly.h"
 #include "RotationMatrix.h"
 #include "Function.h"
 #include "SinglePhaseFluidProperties.h"
@@ -28,20 +31,56 @@ PorousFlowPeacemanBorehole::validParams()
   // one.  DiracKernelBase's own default of IGNORE would let that happen silently, so raise it to
   // ERROR here.
   params.set<MooseEnum>("point_not_found_behavior") = "ERROR";
-  params.addRequiredParam<FunctionName>(
+  MooseEnum control("bhp rate", "bhp");
+  params.addParam<MooseEnum>(
+      "control",
+      control,
+      "bhp: the bottom-hole pressure is prescribed by bottom_p_or_t.  rate: the bottom-hole "
+      "pressure is the scalar variable bottom_hole_pressure, solved for so that the flux summed "
+      "over the completions equals 'rate' (unless that would need more than bhp_max)");
+  params.addParam<FunctionName>(
       "character",
-      "If zero then borehole does nothing.  If positive the borehole acts as a sink "
+      "Needed with control = bhp, not used with control = rate.  If zero then borehole does "
+      "nothing.  If positive the borehole acts as a sink "
       "(production well) for porepressure > borehole pressure, and does nothing "
       "otherwise.  If negative the borehole acts as a source (injection well) for "
       "porepressure < borehole pressure, and does nothing otherwise.  The flow rate "
       "to/from the borehole is multiplied by |character|, so usually character = +/- "
       "1, but you can specify other quantities to provide an overall scaling to the "
       "flow if you like.");
-  params.addRequiredParam<FunctionName>("bottom_p_or_t",
-                                        "For function_of=pressure, this function is the "
-                                        "pressure at the bottom of the borehole, "
-                                        "otherwise it is the temperature at the bottom of "
-                                        "the borehole.");
+  params.addParam<FunctionName>("bottom_p_or_t",
+                                "Needed with control = bhp.  For function_of=pressure, this "
+                                "function is the pressure at the bottom of the borehole, "
+                                "otherwise it is the temperature at the bottom of the borehole.");
+  params.renameCoupledVar("scalar_variable",
+                          "bottom_hole_pressure",
+                          "The scalar variable holding the pressure at the bottom of the borehole "
+                          "(control = rate).  Its value is solved for, not prescribed: it is "
+                          "whatever delivers 'rate'.  It needs a NullScalarKernel, because the "
+                          "kernel coverage check does not see that DiracKernels assemble its "
+                          "equation");
+  params.addParam<FunctionName>(
+      "rate",
+      "The rate the borehole delivers (control = rate), summed over all of its completions, "
+      "positive for production and negative for injection.  The units are those of the equation "
+      "the borehole contributes to, so kg/s for a fluid mass equation.  Where a borehole is made "
+      "of "
+      "several objects sharing bottom_hole_pressure (eg one per fluid phase and component), each "
+      "object that contributes to the constraint (compute_scalar_residuals = true) adds its flux "
+      "to "
+      "it, and the first adds the rate, so they must all give the same rate");
+  params.addParam<FunctionName>(
+      "bhp_max",
+      "The bottom-hole pressure the borehole may not exceed (control = rate).  Where delivering "
+      "'rate' would need more than this, the borehole holds this pressure instead and delivers "
+      "whatever rate follows.  The constraint is decided once per timestep, so the bottom-hole "
+      "pressure may exceed bhp_max for the timestep in which the limit is first reached");
+  params.addParam<unsigned int>(
+      "max_constraint_swaps",
+      5,
+      "The number of times in one timestep the borehole may switch between delivering 'rate' and "
+      "holding 'bhp_max'.  Once this many switches have been made the borehole keeps whichever "
+      "constraint it holds until the next timestep");
   params.addParam<RealVectorValue>(
       "unit_weight",
       "(fluid_density*gravitational_acceleration) as a vector pointing downwards.  "
@@ -134,6 +173,7 @@ PorousFlowPeacemanBorehole::validParams()
 
 PorousFlowPeacemanBorehole::PorousFlowPeacemanBorehole(const InputParameters & parameters)
   : PorousFlowLineSink(parameters),
+    _control(getParam<MooseEnum>("control").getEnum<Control>()),
     _character(isParamValid("character") ? &getFunction("character") : nullptr),
     _p_bot(isParamValid("bottom_p_or_t") ? &getFunction("bottom_p_or_t") : nullptr),
     _unit_weight(isParamValid("unit_weight") ? getParam<RealVectorValue>("unit_weight")
@@ -155,25 +195,67 @@ PorousFlowPeacemanBorehole::PorousFlowPeacemanBorehole(const InputParameters & p
     _re_constant(getParam<Real>("re_constant")),
     _well_constant(getParam<Real>("well_constant")),
     _has_permeability(
-        hasMaterialProperty<RealTensorValue>("PorousFlow_permeability_qp") &&
+        !_fv && hasMaterialProperty<RealTensorValue>("PorousFlow_permeability_qp") &&
         hasMaterialProperty<std::vector<RealTensorValue>>("dPorousFlow_permeability_qp_dvar")),
     _has_thermal_conductivity(
-        hasMaterialProperty<RealTensorValue>("PorousFlow_thermal_conductivity_qp") &&
+        !_fv && hasMaterialProperty<RealTensorValue>("PorousFlow_thermal_conductivity_qp") &&
         hasMaterialProperty<std::vector<RealTensorValue>>(
             "dPorousFlow_thermal_conductivity_qp_dvar")),
-    _perm_or_cond(_p_or_t == PorTchoice::pressure
-                      ? getMaterialProperty<RealTensorValue>("PorousFlow_permeability_qp")
-                      : getMaterialProperty<RealTensorValue>("PorousFlow_thermal_conductivity_qp")),
-    _dperm_or_cond_dvar(
-        _p_or_t == PorTchoice::pressure
-            ? getMaterialProperty<std::vector<RealTensorValue>>("dPorousFlow_permeability_qp_dvar")
-            : getMaterialProperty<std::vector<RealTensorValue>>(
-                  "dPorousFlow_thermal_conductivity_qp_dvar"))
+    _perm_or_cond(
+        _fv ? nullptr
+            : (_p_or_t == PorTchoice::pressure
+                   ? &getMaterialProperty<RealTensorValue>("PorousFlow_permeability_qp")
+                   : &getMaterialProperty<RealTensorValue>("PorousFlow_thermal_conductivity_qp"))),
+    _dperm_or_cond_dvar(_fv ? nullptr
+                            : (_p_or_t == PorTchoice::pressure
+                                   ? &getMaterialProperty<std::vector<RealTensorValue>>(
+                                         "dPorousFlow_permeability_qp_dvar")
+                                   : &getMaterialProperty<std::vector<RealTensorValue>>(
+                                         "dPorousFlow_thermal_conductivity_qp_dvar"))),
+    _rate(isParamValid("rate") ? &getFunction("rate") : nullptr),
+    _bhp_max(isParamValid("bhp_max") ? &getFunction("bhp_max") : nullptr),
+    _max_swaps(getParam<unsigned int>("max_constraint_swaps")),
+    _ad_pp(_fv && _p_or_t == PorTchoice::pressure
+               ? &getADMaterialProperty<std::vector<Real>>("PorousFlow_porepressure_qp")
+               : nullptr),
+    _ad_temperature(_fv && _p_or_t == PorTchoice::temperature
+                        ? &getADMaterialProperty<Real>("PorousFlow_temperature_qp")
+                        : nullptr),
+    _ad_perm_or_cond(
+        _fv ? (_p_or_t == PorTchoice::pressure
+                   ? &getADMaterialProperty<RealTensorValue>("PorousFlow_permeability_qp")
+                   : &getADMaterialProperty<RealTensorValue>("PorousFlow_thermal_conductivity_qp"))
+            : nullptr),
+    _ad_density(_fv && _use_mobility
+                    ? &getADMaterialProperty<std::vector<Real>>("PorousFlow_fluid_phase_density_qp")
+                    : nullptr),
+    _ad_viscosity(_fv && _use_mobility
+                      ? &getADMaterialProperty<std::vector<Real>>("PorousFlow_viscosity_qp")
+                      : nullptr),
+    _ad_relperm(
+        _fv && (_use_mobility || _use_relative_permeability)
+            ? &getADMaterialProperty<std::vector<Real>>("PorousFlow_relative_permeability_qp")
+            : nullptr),
+    _ad_mass_fractions(
+        _fv && _use_mass_fraction
+            ? &getADMaterialProperty<std::vector<std::vector<Real>>>("PorousFlow_mass_frac_qp")
+            : nullptr),
+    _ad_enthalpy(_fv && _use_enthalpy ? &getADMaterialProperty<std::vector<Real>>(
+                                            "PorousFlow_fluid_phase_enthalpy_qp")
+                                      : nullptr),
+    _ad_internal_energy(
+        _fv && _use_internal_energy
+            ? &getADMaterialProperty<std::vector<Real>>("PorousFlow_fluid_phase_internal_energy_qp")
+            : nullptr),
+    _ad_multiplying_var(_fv ? &adCoupledValue("multiplying_var") : nullptr),
+    _ad_bottom_hole_pressure(_fv && _control == Control::rate && _use_scalar
+                                 ? &adCoupledScalarValue("scalar_variable")
+                                 : nullptr)
 {
-  if (_p_or_t == PorTchoice::pressure && !_has_permeability)
+  if (!_fv && _p_or_t == PorTchoice::pressure && !_has_permeability)
     mooseError("PorousFlowPeacemanBorehole: You have specified function_of=porepressure, but you "
                "do not have a quadpoint permeability material");
-  if (_p_or_t == PorTchoice::temperature && !_has_thermal_conductivity)
+  if (!_fv && _p_or_t == PorTchoice::temperature && !_has_thermal_conductivity)
     mooseError("PorousFlowPeacemanBorehole: You have specified function_of=temperature, but you do "
                "not have a quadpoint thermal_conductivity material");
 
@@ -196,6 +278,47 @@ PorousFlowPeacemanBorehole::PorousFlowPeacemanBorehole(const InputParameters & p
     paramError("unit_weight",
                "PorousFlowPeacemanBorehole: must specify at least one of 'unit_weight' or "
                "'unit_weight_fp'");
+
+  if (_control == Control::bhp)
+  {
+    if (!_p_bot)
+      paramError("bottom_p_or_t", "bottom_p_or_t is needed with control = bhp");
+    if (!_character)
+      paramError("character", "character is needed with control = bhp");
+    if (_use_scalar || _rate || _bhp_max)
+      paramError("control",
+                 "bottom_hole_pressure, rate and bhp_max are only used with control = rate");
+  }
+  else
+  {
+    if (!_use_scalar)
+      paramError(
+          "bottom_hole_pressure",
+          "with control = rate the borehole solves for its bottom-hole pressure, so it needs "
+          "a scalar variable to hold it");
+    if (_k_order != 1)
+      paramError("bottom_hole_pressure",
+                 "a borehole has one bottom-hole pressure, so this must be a scalar variable "
+                 "carrying a single degree of freedom, but the one supplied carries ",
+                 _k_order);
+    if (_compute_scalar_residuals && !_rate)
+      paramError("rate",
+                 "this object contributes to the borehole's constraint, so it needs the rate.  "
+                 "Objects that contribute only flux set compute_scalar_residuals = false");
+    if (_p_bot)
+      paramError("bottom_p_or_t",
+                 "bottom_p_or_t is not used with control = rate: the bottom-hole pressure is the "
+                 "bottom_hole_pressure variable");
+    if (_character)
+      paramError("character",
+                 "character is not used with control = rate: fluid flows in either direction at "
+                 "every completion, as the solved bottom-hole pressure dictates");
+    if (_use_density_from_temperature)
+      paramError("unit_weight_fp", "unit_weight_fp is not available with control = rate");
+  }
+
+  if (_fv && _use_density_from_temperature)
+    paramError("unit_weight_fp", "unit_weight_fp is not available for finite-volume variables");
 
   if (_use_density_from_temperature)
   {
@@ -246,6 +369,93 @@ PorousFlowPeacemanBorehole::initialSetup()
   }
   if (num_pts == (unsigned)1)
     _rot_matrix[0] = RotationMatrix::rotVecToZ(_line_direction);
+
+  if (contributesToConstraint())
+  {
+    // The objects sharing the bottom-hole pressure that contribute to the constraint each add
+    // their flux to it, and the first of them adds the rate and decides whether bhp_max holds
+    const auto rate_name = getParam<FunctionName>("rate");
+    const auto bhp_max_name = isParamValid("bhp_max") ? getParam<FunctionName>("bhp_max") : "";
+    const auto & dirac_kernels = _fe_problem.getNonlinearSystemBase(_sys.number())
+                                     .getDiracKernelWarehouse()
+                                     .getActiveObjects();
+    for (const auto & dk : dirac_kernels)
+    {
+      auto * bh = dynamic_cast<PorousFlowPeacemanBorehole *>(dk.get());
+      if (!bh || !bh->contributesToConstraint() ||
+          bh->bottomHolePressureVariable() != bottomHolePressureVariable())
+        continue;
+      if (bh->getParam<FunctionName>("rate") != rate_name)
+        paramError("rate",
+                   "the objects ",
+                   name(),
+                   " and ",
+                   bh->name(),
+                   " share bottom_hole_pressure and both contribute to its constraint, so they "
+                   "are one borehole and must use the same rate");
+      if ((bh->isParamValid("bhp_max") ? bh->getParam<FunctionName>("bhp_max") : "") !=
+          bhp_max_name)
+        paramError("bhp_max",
+                   "the objects ",
+                   name(),
+                   " and ",
+                   bh->name(),
+                   " share bottom_hole_pressure and both contribute to its constraint, so they "
+                   "must use the same bhp_max");
+      if (!_owner)
+        _owner = bh;
+    }
+    _adds_rate = (_owner == this);
+  }
+}
+
+void
+PorousFlowPeacemanBorehole::timestepSetup()
+{
+  PorousFlowLineSink::timestepSetup();
+  if (!_adds_rate || !_bhp_max)
+    return;
+
+  // The constraint is decided here, once per timestep, so the equation being solved never changes
+  // part way through a solve.  Deciding it between Newton iterations instead was measured to cost a
+  // failed timestep wherever the limit engages, while never engaging the limit within the step
+  // that first breaches it
+  _n_swaps = 0;
+  _communicator.sum(_rate_mode_residual);
+  updateConstraint();
+}
+
+void
+PorousFlowPeacemanBorehole::updateConstraint()
+{
+  // Once the borehole has switched often enough in one timestep, stop: an operating point sitting
+  // on the limit can otherwise chatter between the two constraints and never converge
+  if (_n_swaps >= _max_swaps)
+    return;
+
+  const Real bhp_max = _bhp_max->value(_t, _bottom_point);
+  if (!_clamped && _pbh_last > bhp_max)
+  {
+    // Delivering the rate needs a pressure the borehole is not allowed to reach
+    _clamped = true;
+    ++_n_swaps;
+  }
+  else if (_clamped && _rate_mode_residual < 0.0)
+  {
+    // The flux falls as the bottom-hole pressure rises, so a negative rate-constraint residual at
+    // the limit means the rate would be met below it, and the limit no longer binds
+    _clamped = false;
+    ++_n_swaps;
+  }
+}
+
+void
+PorousFlowPeacemanBorehole::recordRateMode(const Real rate_mode)
+{
+  if (!_owner || !_owner->_bhp_max)
+    return;
+  _owner->_rate_mode_residual += rate_mode;
+  _owner->_pbh_last = _kappa[0];
 }
 
 void
@@ -253,6 +463,9 @@ PorousFlowPeacemanBorehole::residualSetup()
 {
   PorousFlowLineSink::residualSetup();
   computeWellborePressures();
+  // The value left by the last residual evaluation of a timestep decides the next
+  if (_adds_rate)
+    _rate_mode_residual = 0.0;
 }
 
 void
@@ -439,7 +652,7 @@ PorousFlowPeacemanBorehole::wellConstantSum(unsigned current_dirac_ptid) const
   if (current_dirac_ptid > 0)
     // contribution from half-segment "behind" this point (must have >1 point for
     // current_dirac_ptid>0)
-    wc_sum += wellConstant(_perm_or_cond[_qp],
+    wc_sum += wellConstant(permOrCond(),
                            _rot_matrix[current_dirac_ptid - 1],
                            _half_seg_len[current_dirac_ptid - 1],
                            _current_elem,
@@ -447,7 +660,7 @@ PorousFlowPeacemanBorehole::wellConstantSum(unsigned current_dirac_ptid) const
 
   if (current_dirac_ptid + 1 < _zs.size() || _zs.size() == 1)
     // contribution from half-segment "ahead of" this point, or we only have one point
-    wc_sum += wellConstant(_perm_or_cond[_qp],
+    wc_sum += wellConstant(permOrCond(),
                            _rot_matrix[current_dirac_ptid],
                            _half_seg_len[current_dirac_ptid],
                            _current_elem,
@@ -456,9 +669,20 @@ PorousFlowPeacemanBorehole::wellConstantSum(unsigned current_dirac_ptid) const
   return wc_sum;
 }
 
+RealTensorValue
+PorousFlowPeacemanBorehole::permOrCond() const
+{
+  return _fv ? MetaPhysicL::raw_value((*_ad_perm_or_cond)[_qp]) : (*_perm_or_cond)[_qp];
+}
+
 Real
 PorousFlowPeacemanBorehole::computeQpBaseOutflow(unsigned current_dirac_ptid) const
 {
+  if (_control == Control::rate)
+    // No directional gate: fluid flows in either direction at every completion, and the flux is
+    // differentiable in the bottom-hole pressure at the operating point the constraint settles on
+    return conductance(current_dirac_ptid) * (ptqp() - boreholePressure());
+
   const Real character = _character->value(_t, _q_point[_qp]);
   if (character == 0.0)
     return 0.0;
@@ -485,6 +709,17 @@ PorousFlowPeacemanBorehole::computeQpBaseOutflowJacobian(unsigned jvar,
 {
   outflow = 0.0;
   outflowp = 0.0;
+
+  if (_control == Control::rate)
+  {
+    if (_dictator.notPorousFlowVariable(jvar))
+      return;
+    const unsigned pvar = _dictator.porousFlowVariableNum(jvar);
+    const Real c = conductance(current_dirac_ptid);
+    outflow = c * (ptqp() - boreholePressure());
+    outflowp = c * dptqp(pvar) * _phi[_j][_qp];
+    return;
+  }
 
   const Real character = _character->value(_t, _q_point[_qp]);
   if (character == 0.0)
@@ -514,7 +749,7 @@ PorousFlowPeacemanBorehole::computeQpBaseOutflowJacobian(unsigned jvar,
     if ((character < 0.0 && pp < bh_pressure) || (character > 0.0 && pp > bh_pressure))
     {
       // injection, so outflow<0 || // production, so outflow>0
-      const Real wc = wellConstant(_perm_or_cond[_qp],
+      const Real wc = wellConstant(permOrCond(),
                                    _rot_matrix[current_dirac_ptid - 1],
                                    _half_seg_len[current_dirac_ptid - 1],
                                    _current_elem,
@@ -530,7 +765,7 @@ PorousFlowPeacemanBorehole::computeQpBaseOutflowJacobian(unsigned jvar,
     if ((character < 0.0 && pp < bh_pressure) || (character > 0.0 && pp > bh_pressure))
     {
       // injection, so outflow<0 || // production, so outflow>0
-      const Real wc = wellConstant(_perm_or_cond[_qp],
+      const Real wc = wellConstant(permOrCond(),
                                    _rot_matrix[current_dirac_ptid],
                                    _half_seg_len[current_dirac_ptid],
                                    _current_elem,
@@ -542,4 +777,299 @@ PorousFlowPeacemanBorehole::computeQpBaseOutflowJacobian(unsigned jvar,
 
   outflowp *= _test[_i][_qp] * std::abs(character);
   outflow *= _test[_i][_qp] * std::abs(character);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Rate control, finite elements
+
+Real
+PorousFlowPeacemanBorehole::conductance(unsigned current_dirac_ptid) const
+{
+  return wellConstantSum(current_dirac_ptid) * _test[_i][_qp];
+}
+
+Real
+PorousFlowPeacemanBorehole::boreholePressure() const
+{
+  return _kappa[0] + _unit_weight * (_q_point[_qp] - _bottom_point);
+}
+
+Real
+PorousFlowPeacemanBorehole::computeQpScalarResidual()
+{
+  // The flux of the whole completion is the sum over the element's nodes, since the residual of
+  // each node carries only its own share via the test function
+  const unsigned current_dirac_ptid = currentPointCachedID();
+  const Real fraction = completionFraction(current_dirac_ptid);
+
+  const auto i_save = _i;
+  Real flux = 0.0;
+  for (_i = 0; _i < _test.size(); ++_i)
+    flux += weightedOutflow();
+  _i = i_save;
+
+  // The rate is a property of the borehole, not of any one completion or object, so it is added
+  // by the owner alone, shared between the completions so that it enters exactly once however
+  // they are spread over elements and processors
+  const Real rate_mode = flux - (_adds_rate ? _rate->value(_t, _q_point[_qp]) * fraction : 0.0);
+  recordRateMode(rate_mode);
+
+  if (_owner && _owner->clamped())
+    // The limit has taken over: the bottom-hole pressure is pinned to bhp_max
+    return _adds_rate ? (_kappa[0] - _bhp_max->value(_t, _bottom_point)) * fraction : 0.0;
+
+  return rate_mode;
+}
+
+Real
+PorousFlowPeacemanBorehole::computeQpJacobianScalar()
+{
+  // outflow = weighting * conductance * (porepressure - boreholePressure()), and neither the
+  // weighting nor the conductance depends on the borehole pressure
+  const unsigned current_dirac_ptid = currentPointCachedID();
+  const Real base_outflow = computeQpBaseOutflow(current_dirac_ptid);
+  return -weightingFactor(base_outflow) * conductance(current_dirac_ptid);
+}
+
+Real
+PorousFlowPeacemanBorehole::computeQpScalarJacobian()
+{
+  if (_owner && _owner->clamped())
+    return _adds_rate ? completionFraction(currentPointCachedID()) : 0.0;
+
+  const auto i_save = _i;
+  Real jacobian = 0.0;
+  for (_i = 0; _i < _test.size(); ++_i)
+    jacobian += computeQpJacobianScalar();
+  _i = i_save;
+  return jacobian;
+}
+
+Real
+PorousFlowPeacemanBorehole::computeQpScalarOffDiagJacobian(const unsigned int jvar_num)
+{
+  if (_owner && _owner->clamped())
+    // A pinned bottom-hole pressure does not depend on the state of the reservoir
+    return 0.0;
+
+  const auto i_save = _i;
+  Real jacobian = 0.0;
+  for (_i = 0; _i < _test.size(); ++_i)
+    jacobian += jac(jvar_num);
+  _i = i_save;
+  return jacobian;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Finite volumes: AD cell materials and AD assembly
+
+ADReal
+PorousFlowPeacemanBorehole::fvPorT() const
+{
+  return _p_or_t == PorTchoice::pressure ? (*_ad_pp)[_qp][_ph] : (*_ad_temperature)[_qp];
+}
+
+ADReal
+PorousFlowPeacemanBorehole::fvPointOutflow(unsigned int i)
+{
+  Real character = 1.0;
+  ADReal borehole_p = 0.0;
+  if (_control == Control::rate)
+    borehole_p = (*_ad_bottom_hole_pressure)[0] + _unit_weight * (_q_point[_qp] - _bottom_point);
+  else
+  {
+    character = _character->value(_t, _q_point[_qp]);
+    if (character == 0.0)
+      return 0.0;
+    borehole_p = wellborePressure(i);
+  }
+
+  const ADReal p_or_t = fvPorT();
+  const Real drawdown = MetaPhysicL::raw_value(p_or_t - borehole_p);
+  // With control = bhp the borehole only acts in the direction given by the sign of character, as
+  // for finite elements
+  if (_control == Control::bhp &&
+      !((character < 0.0 && drawdown < 0.0) || (character > 0.0 && drawdown > 0.0)))
+    return 0.0;
+  const bool injecting = drawdown < 0.0;
+
+  ADReal multiplier = std::abs(character) * wellConstantSum(i) * (*_ad_multiplying_var)[_qp];
+  if (_use_relative_permeability)
+    multiplier *= (*_ad_relperm)[_qp][_ph];
+  if (_use_mobility)
+  {
+    if (_mobility_type == MobilityTypeChoice::phase)
+      multiplier *=
+          (*_ad_relperm)[_qp][_ph] * (*_ad_density)[_qp][_ph] / (*_ad_viscosity)[_qp][_ph];
+    else
+    {
+      // the density of the nominated (injected) phase times the total mobility of the cell
+      ADReal total_mobility = 0.0;
+      for (const auto p : make_range(_dictator.numPhases()))
+        total_mobility += (*_ad_relperm)[_qp][p] / (*_ad_viscosity)[_qp][p];
+      multiplier *= (*_ad_density)[_qp][_ph] * total_mobility;
+    }
+  }
+  if (_use_mass_fraction)
+  {
+    // Injected fluid carries the composition of the injected stream, outflow that of the cell
+    if (injecting && _use_injected_mass_fraction)
+      multiplier *= _injected_mass_fraction->value(_t, _q_point[_qp]);
+    else
+      multiplier *= (*_ad_mass_fractions)[_qp][_ph][_sp];
+  }
+  if (_use_enthalpy)
+    multiplier *= (*_ad_enthalpy)[_qp][_ph];
+  if (_use_internal_energy)
+    multiplier *= (*_ad_internal_energy)[_qp][_ph];
+
+  return multiplier * (p_or_t - borehole_p);
+}
+
+void
+PorousFlowPeacemanBorehole::fvCellResiduals(ADReal & outflow,
+                                            ADReal & scalar_residual,
+                                            Real & rate_mode,
+                                            const bool record_point_fluxes)
+{
+  outflow = 0.0;
+  scalar_residual = 0.0;
+  rate_mode = 0.0;
+  const bool contributes = contributesToConstraint();
+  const bool clamped = contributes && _owner && _owner->clamped();
+
+  forEachPoint(
+      [&](const Real point_value)
+      {
+        const unsigned int i = currentPointCachedID();
+        const ADReal q = point_value * fvPointOutflow(i);
+        outflow += q;
+        if (record_point_fluxes && _point_fluxes)
+          _point_fluxes->add(i, MetaPhysicL::raw_value(q));
+        if (!contributes)
+          return;
+        const Real fraction = completionFraction(i);
+        const Real rate_part = _adds_rate ? _rate->value(_t, _q_point[_qp]) * fraction : 0.0;
+        rate_mode += MetaPhysicL::raw_value(q) - rate_part;
+        if (clamped)
+        {
+          if (_adds_rate)
+            scalar_residual +=
+                ((*_ad_bottom_hole_pressure)[0] - _bhp_max->value(_t, _bottom_point)) * fraction;
+        }
+        else
+          scalar_residual += q - rate_part;
+      });
+}
+
+void
+PorousFlowPeacemanBorehole::fvComputeResidual()
+{
+  ADReal outflow, scalar_residual;
+  Real rate_mode;
+  fvCellResiduals(outflow, scalar_residual, rate_mode, true);
+
+  // A finite-volume variable has one dof per cell, whose test function is 1 in the cell
+  if (_compute_field_residuals)
+    addResiduals(_assembly,
+                 std::array<Real, 1>{{MetaPhysicL::raw_value(outflow)}},
+                 _var.dofIndices(),
+                 _var.scalingFactor());
+  _total_outflow_mass.add(MetaPhysicL::raw_value(outflow) * _dt);
+
+  if (contributesToConstraint())
+  {
+    addResiduals(_assembly,
+                 std::array<Real, 1>{{MetaPhysicL::raw_value(scalar_residual)}},
+                 _kappa_var_ptr->dofIndices(),
+                 _kappa_var_ptr->scalingFactor());
+    recordRateMode(rate_mode);
+  }
+
+  // The Dirac residual loop does not add the residuals cached with explicit dof indices, so add
+  // them here.  This does not double count: Assembly clears the cache as it adds
+  _fe_problem.addCachedResidual(_tid);
+}
+
+void
+PorousFlowPeacemanBorehole::fvComputeJacobian()
+{
+  // AD gives the derivatives with respect to all the variables at once (PorousFlow variables and
+  // the bottom-hole pressure)
+  ADReal outflow, scalar_residual;
+  Real rate_mode;
+  fvCellResiduals(outflow, scalar_residual, rate_mode, false);
+
+  if (_compute_field_residuals)
+    addJacobian(
+        _assembly, std::array<ADReal, 1>{{outflow}}, _var.dofIndices(), _var.scalingFactor());
+  if (contributesToConstraint())
+    addJacobian(_assembly,
+                std::array<ADReal, 1>{{scalar_residual}},
+                _kappa_var_ptr->dofIndices(),
+                _kappa_var_ptr->scalingFactor());
+}
+
+void
+PorousFlowPeacemanBorehole::fvComputeResidualAndJacobian()
+{
+  ADReal outflow, scalar_residual;
+  Real rate_mode;
+  fvCellResiduals(outflow, scalar_residual, rate_mode, true);
+
+  if (_compute_field_residuals)
+    addResidualsAndJacobian(
+        _assembly, std::array<ADReal, 1>{{outflow}}, _var.dofIndices(), _var.scalingFactor());
+  _total_outflow_mass.add(MetaPhysicL::raw_value(outflow) * _dt);
+
+  if (contributesToConstraint())
+  {
+    addResidualsAndJacobian(_assembly,
+                            std::array<ADReal, 1>{{scalar_residual}},
+                            _kappa_var_ptr->dofIndices(),
+                            _kappa_var_ptr->scalingFactor());
+    recordRateMode(rate_mode);
+  }
+  _fe_problem.addCachedResidual(_tid);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Dispatch between finite elements and finite volumes
+
+void
+PorousFlowPeacemanBorehole::computeResidual()
+{
+  if (_fv)
+    fvComputeResidual();
+  else
+    PorousFlowLineSink::computeResidual();
+}
+
+void
+PorousFlowPeacemanBorehole::computeJacobian()
+{
+  if (_fv)
+    fvComputeJacobian();
+  else
+    PorousFlowLineSink::computeJacobian();
+}
+
+void
+PorousFlowPeacemanBorehole::computeOffDiagJacobian(const unsigned int jvar_num)
+{
+  if (!_fv)
+    PorousFlowLineSink::computeOffDiagJacobian(jvar_num);
+  else if (jvar_num == _var.number())
+    // ComputeDiracThread calls this once per coupled variable.  The AD Jacobian holds every
+    // column, so it is assembled once, for the diagonal block
+    fvComputeJacobian();
+}
+
+void
+PorousFlowPeacemanBorehole::computeResidualAndJacobian()
+{
+  if (_fv)
+    fvComputeResidualAndJacobian();
+  else
+    PorousFlowLineSink::computeResidualAndJacobian();
 }

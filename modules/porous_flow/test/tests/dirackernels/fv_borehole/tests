@@ -1,5 +1,5 @@
 [Tests]
-  design = 'FVPorousFlowPeacemanBorehole.md'
+  design = 'PorousFlowPeacemanBorehole.md'
   issues = '#34110'
 
   [rate_control]
@@ -33,8 +33,7 @@
     []
     [two_phase_production]
       type = CSVDiff
-      input = fv_borehole_2ph_rate.i
-      cli_args = 'Variables/sgas/initial_condition=0.3 Functions/rate/expression=1 Outputs/file_base=fv_borehole_2ph_rate_produce_out'
+      input = fv_borehole_2ph_rate_produce.i
       csvdiff = fv_borehole_2ph_rate_produce_out.csv
       # the rates computed from the change in fluid mass carry round-off noise of about 1E-10 kg/s
       abs_zero = 1E-8
@@ -62,8 +61,7 @@
     []
     [two_phase_production]
       type = CSVDiff
-      input = fv_borehole_2ph_bhp.i
-      cli_args = 'Variables/sgas/initial_condition=0.3 Functions/bottom_p/expression=9.98E6 Outputs/file_base=fv_borehole_2ph_bhp_produce_out'
+      input = fv_borehole_2ph_bhp_produce.i
       csvdiff = fv_borehole_2ph_bhp_produce_out.csv
       # the rates computed from the change in fluid mass carry round-off noise of about 1E-10 kg/s
       abs_zero = 1E-8
@@ -74,7 +72,7 @@
   [producer_only]
     type = CSVDiff
     input = fv_borehole_bhp.i
-    cli_args = 'DiracKernels/bh/allow_crossflow=false Outputs/file_base=fv_borehole_bhp_producer_out'
+    cli_args = 'DiracKernels/bh/character=1 Outputs/file_base=fv_borehole_bhp_producer_out'
     csvdiff = fv_borehole_bhp_producer_out.csv
     # the rates computed from the change in fluid mass carry round-off noise of about 1E-10 kg/s
     abs_zero = 1E-8
@@ -87,22 +85,15 @@
       type = RunException
       input = fv_borehole_bhp.i
       cli_args = 'DiracKernels/bh/control=rate'
-      expect_err = 'rate and bottom_p must be given for control = rate'
+      expect_err = 'with control = rate the borehole solves for its bottom-hole pressure'
       detail = 'is rate controlled but has no rate or no bottomhole-pressure variable,'
     []
     [bhp_without_bottom_p_or_t]
       type = RunException
       input = fv_borehole_rate.i
       cli_args = 'DiracKernels/bh/control=bhp'
-      expect_err = 'bottom_p_or_t must be given for control = bhp'
-      detail = 'is controlled by the bottomhole pressure but has no bottomhole-pressure function, or'
-    []
-    [rate_without_mobility]
-      type = RunException
-      input = fv_borehole_rate.i
-      cli_args = 'DiracKernels/bh/use_mobility=false'
-      expect_err = 'use_mobility = true is required'
-      detail = 'is rate controlled but its fluxes are not mass fluxes.'
+      expect_err = 'bottom_p_or_t is needed with control = bhp'
+      detail = 'is controlled by the bottomhole pressure but has no bottomhole-pressure function.'
     []
   []
 []

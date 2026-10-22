@@ -99,7 +99,7 @@
     csvdiff = 'injection_bhp_max.csv'
     abs_zero = 1E-10
     requirement = 'The system shall solve for the bottom-hole pressure of a well declaring a pressure limit, expanding the well into one borehole owning the rate constraint and one per fluid component carrying the injected composition, all sharing a single scalar unknown, and shall hold the limit once the requested rate can no longer be delivered beneath it.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [except_wrong_mass_fraction_vars]
@@ -165,7 +165,7 @@
     csvdiff = 'injection_constrained_rate.csv'
     abs_zero = 1E-10
     requirement = 'The system shall deliver the rate requested of a well whose bottom-hole pressure is solved for, dividing it between the completions and between the fluid components according to the injected composition, when the pressure limit never binds.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [injection_constrained_rate_parallel]
@@ -178,7 +178,7 @@
     min_parallel = 2
     max_parallel = 2
     requirement = 'The system shall divide a well\'s requested rate between completions lying on different processors so that the total delivered is the rate asked for, giving the same answer on two processors as on one.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [injection_constrained_rate_parallel4]
@@ -191,7 +191,7 @@
     min_parallel = 4
     max_parallel = 4
     requirement = 'The system shall divide a well\'s requested rate between completions independently of how many processors the completions are spread across, giving the same answer on four processors as on one.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [injection_wellbore_gradient]
@@ -201,7 +201,7 @@
     csvdiff = 'injection_wellbore_gradient.csv'
     abs_zero = 1E-10
     requirement = 'The system shall carry the weight of the fluid standing in the wellbore down to each completion, so that a well completed over a tall interval does not see its bottom-hole pressure throughout, while still delivering the rate asked of it.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [injection_fv]
@@ -211,7 +211,7 @@
     csvdiff = 'injection_fv.csv'
     abs_zero = 1E-8
     requirement = 'The system shall build a finite-volume Peaceman borehole for an injection well with a pressure limit when the fluid variables are finite-volume variables, delivering the requested rate while the limit is not reached.'
-    design = 'PorousFlowInjectionWell.md FVPorousFlowPeacemanBorehole.md'
+    design = 'PorousFlowInjectionWell.md PorousFlowPeacemanBorehole.md'
     issues = '#34110'
   []
   [injection_fv_bhp_max]
@@ -221,7 +221,7 @@
     csvdiff = 'injection_fv_bhp_max.csv'
     abs_zero = 1E-8
     requirement = 'The system shall hold the bottom-hole pressure of a finite-volume injection well at its limit, and inject whatever rate that pressure sustains, once the requested rate would need a higher pressure.'
-    design = 'PorousFlowInjectionWell.md FVPorousFlowPeacemanBorehole.md'
+    design = 'PorousFlowInjectionWell.md PorousFlowPeacemanBorehole.md'
     issues = '#34110'
   []
   [production_fv_error]

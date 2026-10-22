@@ -106,7 +106,8 @@
 
 [DiracKernels]
   [bh]
-    type = PorousFlowConstrainedPeacemanBorehole
+    type = PorousFlowPeacemanBorehole
+    control = rate
     variable = pp
     SumQuantityUO = borehole_total_outflow_mass
     point_file = bh03.bh

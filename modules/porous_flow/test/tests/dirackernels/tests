@@ -570,8 +570,8 @@
     input = 'bh03_constrained.i'
     csvdiff = 'bh03_constrained.csv'
     abs_zero = 1E-10
-    requirement = 'PorousFlowConstrainedPeacemanBorehole shall deliver the rate it is asked for at every timestep, solving for the bottom-hole pressure that achieves it, and shall conserve mass while doing so.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    requirement = 'PorousFlowPeacemanBorehole with rate control shall deliver the rate it is asked for at every timestep, solving for the bottom-hole pressure that achieves it, and shall conserve mass while doing so.'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [bh03_constrained_bhp_max]
@@ -580,8 +580,8 @@
     cli_args = 'DiracKernels/bh/bhp_max=1500 Outputs/file_base=bh03_constrained_bhp_max'
     csvdiff = 'bh03_constrained_bhp_max.csv'
     abs_zero = 1E-10
-    requirement = 'PorousFlowConstrainedPeacemanBorehole shall stop delivering its requested rate and hold its maximum bottom-hole pressure instead when the rate could only be met by exceeding that pressure, thereafter delivering the declining rate that the held pressure sustains as the reservoir pressures up towards it.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    requirement = 'PorousFlowPeacemanBorehole with rate control shall stop delivering its requested rate and hold its maximum bottom-hole pressure instead when the rate could only be met by exceeding that pressure, thereafter delivering the declining rate that the held pressure sustains as the reservoir pressures up towards it.'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
 []

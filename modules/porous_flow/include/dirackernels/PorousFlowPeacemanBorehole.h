@@ -20,7 +20,17 @@ class System;
 }
 
 /**
- * Approximates a borehole by a sequence of Dirac Points
+ * Approximates a borehole by a sequence of Dirac Points, using Peaceman's well index.
+ *
+ * The borehole is controlled either by its bottom-hole pressure (control = bhp, the default), which
+ * is then the function bottom_p_or_t, or by its rate (control = rate), in which case the
+ * bottom-hole pressure is a scalar unknown, solved for together with the reservoir so that the flux
+ * summed over the completions equals the requested rate, unless that would need more than bhp_max.
+ *
+ * The variable may be a finite-element or a finite-volume variable.  For finite elements the flux
+ * is computed from the nodal PorousFlow materials, with a hand-coded Jacobian.  For finite volumes
+ * it is computed from the AD quadpoint (cell) materials of the finite-volume PorousFlow objects,
+ * and the residual and Jacobian are assembled from AD.
  */
 class PorousFlowPeacemanBorehole : public PorousFlowLineSink
 {
@@ -37,7 +47,7 @@ public:
 
   /**
    * Peaceman's form of the well constant of one borehole half segment, as used by
-   * PorousFlowPeacemanBorehole.  It is also used by FVPorousFlowPeacemanBorehole
+   * PorousFlowPeacemanBorehole, for finite elements and finite volumes
    * @param perm permeability (or thermal conductivity) tensor
    * @param rot rotation matrix that rotates the half-segment direction to the z axis
    * @param half_len length of the half segment
@@ -55,10 +65,31 @@ public:
   PorousFlowPeacemanBorehole(const InputParameters & parameters);
 
   void virtual initialSetup() override;
+  void virtual timestepSetup() override;
   void virtual residualSetup() override;
   void virtual jacobianSetup() override;
 
+  virtual void computeResidual() override;
+  virtual void computeJacobian() override;
+  virtual void computeOffDiagJacobian(unsigned int jvar_num) override;
+  virtual void computeResidualAndJacobian() override;
+
+  /// Whether the borehole is rate controlled
+  bool rateControlled() const { return _control == Control::rate; }
+
+  /// Whether this borehole contributes its flux to the bottom-hole-pressure constraint
+  bool contributesToConstraint() const { return rateControlled() && _compute_scalar_residuals; }
+
+  /// Number of the bottom-hole-pressure scalar variable (rate control only)
+  unsigned int bottomHolePressureVariable() const { return _kappa_var; }
+
+  /// Whether the borehole is holding bhp_max instead of delivering its rate
+  bool clamped() const { return _clamped; }
+
 protected:
+  /// Whether the bottom-hole pressure is prescribed or solved for to deliver a rate
+  const enum class Control { bhp, rate } _control;
+
   /**
    * If positive then the borehole acts as a sink (producion well) for porepressure > borehole
    * pressure, and does nothing otherwise
@@ -143,11 +174,11 @@ protected:
   /// Whether there is a quadpoint thermal conductivity material (for error checking)
   const bool _has_thermal_conductivity;
 
-  /// Permeability or conductivity of porous material
-  const MaterialProperty<RealTensorValue> & _perm_or_cond;
+  /// Permeability or conductivity of porous material (finite elements)
+  const MaterialProperty<RealTensorValue> * const _perm_or_cond;
 
-  /// d(Permeability)/d(PorousFlow variable)
-  const MaterialProperty<std::vector<RealTensorValue>> & _dperm_or_cond_dvar;
+  /// d(Permeability)/d(PorousFlow variable) (finite elements)
+  const MaterialProperty<std::vector<RealTensorValue>> * const _dperm_or_cond_dvar;
 
   /// Rotation matrix used in well_constant calculation
   std::vector<RealTensorValue> _rot_matrix;
@@ -172,9 +203,112 @@ protected:
    */
   Real wellConstantSum(unsigned current_dirac_ptid) const;
 
+  /// Permeability (or thermal conductivity) at the current quadpoint, from the FE or the FV material
+  RealTensorValue permOrCond() const;
+
   Real computeQpBaseOutflow(unsigned current_dirac_ptid) const override;
   void computeQpBaseOutflowJacobian(unsigned jvar,
                                     unsigned current_dirac_ptid,
                                     Real & outflow,
                                     Real & outflowp) const override;
+
+  ///@{ Rate control (control = rate)
+
+  /**
+   * The flux out of the porespace at the current Dirac point per unit pressure difference and per
+   * unit weighting, for the test function of node _i (finite elements)
+   */
+  Real conductance(unsigned current_dirac_ptid) const;
+
+  /// The pressure in the borehole at the current Dirac point, from the scalar unknown
+  Real boreholePressure() const;
+
+  virtual Real computeQpScalarResidual() override;
+  virtual Real computeQpScalarJacobian() override;
+  virtual Real computeQpScalarOffDiagJacobian(unsigned int jvar_num) override;
+  virtual Real computeQpJacobianScalar() override;
+
+  /**
+   * Choose between delivering the rate and holding bhp_max, using what the last residual evaluation
+   * of the previous timestep recorded.  Taken once per timestep, so the equation being solved never
+   * changes part way through a solve
+   */
+  void updateConstraint();
+
+  /// Records a contribution to the rate-constraint residual, and the bottom-hole pressure, in the owner
+  void recordRateMode(Real rate_mode);
+
+  /// The rate this borehole delivers, positive for production
+  const Function * const _rate;
+
+  /// The bottom-hole pressure this borehole may not exceed, or nullptr if it is unlimited
+  const Function * const _bhp_max;
+
+  /// How many times per timestep the borehole may switch between its two constraints
+  const unsigned int _max_swaps;
+
+  /**
+   * The borehole object that owns the constraint: of the objects sharing the bottom-hole pressure
+   * that contribute to the constraint, the first.  It adds the rate, decides whether bhp_max holds,
+   * and gathers the rate-constraint residual of all of them
+   */
+  PorousFlowPeacemanBorehole * _owner = nullptr;
+
+  /// Whether this object adds the rate to the constraint (ie it is the owner)
+  bool _adds_rate = false;
+
+  /// Whether the borehole is currently holding _bhp_max rather than delivering _rate (owner)
+  bool _clamped = false;
+
+  /// Switches made so far this timestep (owner)
+  unsigned int _n_swaps = 0;
+
+  /**
+   * The residual the rate constraint would have (summed flux - rate), accumulated over the
+   * contributing objects and completions during the latest residual evaluation (owner).  It is
+   * recorded even while the borehole holds bhp_max, because it says when the limit stops binding:
+   * the flux falls with rising bottom-hole pressure, so a negative value means the rate would be
+   * delivered below the limit
+   */
+  Real _rate_mode_residual = 0.0;
+
+  /// The bottom-hole pressure seen during the latest residual evaluation (owner)
+  Real _pbh_last = 0.0;
+  ///@}
+
+  ///@{ Finite volumes: AD quadpoint (cell) materials and the AD assembly
+
+  /// Pressure (function_of = pressure) or temperature (function_of = temperature) in the cell
+  ADReal fvPorT() const;
+
+  /// The flux out of the porespace at borehole point i, which lies in the current cell
+  ADReal fvPointOutflow(unsigned int i);
+
+  /**
+   * Sums over the borehole points in the current cell: the flux into this object's variable, its
+   * contribution to the bottom-hole-pressure constraint, and to the rate-constraint residual
+   */
+  void fvCellResiduals(ADReal & outflow,
+                       ADReal & scalar_residual,
+                       Real & rate_mode,
+                       bool record_point_fluxes);
+
+  void fvComputeResidual();
+  void fvComputeJacobian();
+  void fvComputeResidualAndJacobian();
+
+  const ADMaterialProperty<std::vector<Real>> * const _ad_pp;
+  const ADMaterialProperty<Real> * const _ad_temperature;
+  const ADMaterialProperty<RealTensorValue> * const _ad_perm_or_cond;
+  const ADMaterialProperty<std::vector<Real>> * const _ad_density;
+  const ADMaterialProperty<std::vector<Real>> * const _ad_viscosity;
+  const ADMaterialProperty<std::vector<Real>> * const _ad_relperm;
+  const ADMaterialProperty<std::vector<std::vector<Real>>> * const _ad_mass_fractions;
+  const ADMaterialProperty<std::vector<Real>> * const _ad_enthalpy;
+  const ADMaterialProperty<std::vector<Real>> * const _ad_internal_energy;
+  const ADVariableValue * const _ad_multiplying_var;
+
+  /// The bottom-hole pressure as an AD value (finite volumes, control = rate)
+  const ADVariableValue * const _ad_bottom_hole_pressure;
+  ///@}
 };

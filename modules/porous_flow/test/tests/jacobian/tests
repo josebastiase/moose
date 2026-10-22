@@ -1427,7 +1427,7 @@
     difference_tol = 1E10
     cli_args = 'Executioner/num_steps=1'
     requirement = 'The system shall compute all four Jacobian blocks of a Peaceman borehole whose bottom-hole pressure is a scalar unknown, namely the field-field, field-scalar, scalar-field and scalar-scalar blocks, for a 2-phase 3-component system whose flux is weighted by mobility and mass fraction.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [constrained_borehole_field_rows]
@@ -1437,7 +1437,7 @@
     difference_tol = 1E10
     cli_args = 'Executioner/num_steps=1 DiracKernels/dirac0/compute_scalar_residuals=false'
     requirement = 'The system shall compute the Jacobian of the field equations of a Peaceman borehole whose bottom-hole pressure is a scalar unknown, with respect to both the field variables and that scalar, in isolation from the constraint the borehole imposes.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [constrained_borehole_scalar_row]
@@ -1447,7 +1447,7 @@
     difference_tol = 1E10
     cli_args = 'Executioner/num_steps=1 DiracKernels/dirac0/compute_field_residuals=false'
     requirement = 'The system shall compute the Jacobian of the rate constraint of a Peaceman borehole whose bottom-hole pressure is a scalar unknown, with respect to both the field variables and that scalar, in isolation from the flux the borehole contributes to the field equations.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
   [constrained_borehole_injected_composition]
@@ -1457,7 +1457,7 @@
     difference_tol = 1E10
     cli_args = 'Executioner/num_steps=1 DiracKernels/dirac0/rate=-1E-2 DiracKernels/dirac0/injected_mass_fraction=0.9'
     requirement = 'The system shall compute the Jacobian of a borehole that injects a stream of prescribed composition, where the mass fraction weighting the flux is a property of the injectate rather than of the reservoir and so contributes no derivative.'
-    design = 'porous_flow/sinks.md PorousFlowConstrainedPeacemanBorehole.md'
+    design = 'porous_flow/sinks.md PorousFlowPeacemanBorehole.md'
     issues = '#30392'
   []
 []

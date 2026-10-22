@@ -33,19 +33,21 @@ Because the rate is prescribed rather than computed from a bottom-hole pressure,
 injectivity limit and cannot fail to bootstrap: it is safe from a cold start, even when injecting
 gas into a fully brine-saturated reservoir.  The cost is that the well has no feedback, so it will
 pressurise the near-well cell without limit if the prescribed rate exceeds what the formation can
-accept.  Supplying `bhp_max` to obtain that feedback is not yet possible and raises an error.
+accept.  Supplying `bhp_max` gives that feedback: the well is then modelled by
+[PorousFlowPeacemanBorehole](PorousFlowPeacemanBorehole.md) DiracKernels with `control = rate`, one
+per fluid phase and component, which share the bottom-hole pressure, deliver `rate` until `bhp_max`
+is reached and then hold it.
 
 ## Finite-volume variables
 
 `[Wells]` works out whether the fluid-component variables are finite-element or finite-volume
 variables, and builds the matching objects.  The point and line sources of a prescribed-rate well
-need no material properties, so they are used as they are.  A well with `bhp_max` is instead
-modelled by one [FVPorousFlowPeacemanBorehole](FVPorousFlowPeacemanBorehole.md) per fluid phase and
-component, which share the bottom-hole pressure, deliver `rate` until `bhp_max` is reached and then
-hold it, deciding this once per timestep as the finite-element borehole does.  Their injecting
-completions inject `injection_phase`, with its density and the total mobility of the cell, and the
-composition given by `injected_mass_fractions`; completions where fluid flows out of the reservoir
-(crossflow) produce the cell's fluid.
+need no material properties, so they are used as they are.  A well with `bhp_max` uses the same
+[PorousFlowPeacemanBorehole](PorousFlowPeacemanBorehole.md) DiracKernels as with finite elements,
+which detect the finite-volume variables themselves.  Their injecting completions inject
+`injection_phase`, with its density and the total mobility of the cell, and the composition given by
+`injected_mass_fractions`; completions where fluid flows out of the reservoir (crossflow) produce the
+cell's fluid.
 
 ## Sign convention
 

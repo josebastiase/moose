@@ -112,6 +112,13 @@ protected:
    */
   PorousFlowPointFluxQuantity * const _point_fluxes;
 
+  /**
+   * Whether the variable is a finite-volume variable.  Finite-volume PorousFlow models have only AD
+   * quadpoint materials, so none of the nodal or non-AD material properties below are requested,
+   * and a derived class that supports finite volumes computes the flux from the AD properties
+   */
+  const bool _fv;
+
   /// Whether a quadpoint porepressure material exists (for error checking)
   const bool _has_porepressure;
 

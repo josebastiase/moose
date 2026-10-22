@@ -30,9 +30,8 @@ PorousFlowInjectionWell::validParams()
   params.addParam<unsigned int>(
       "injection_phase",
       0,
-      "The fluid phase of the injected stream.  Where the variables are finite-volume variables "
-      "and 'bhp_max' is given, the well is a FVPorousFlowPeacemanBorehole: its injecting "
-      "completions inject this phase, with its density and the total mobility of the cell");
+      "The fluid phase of the injected stream.  A well with 'bhp_max' is modelled by Peaceman "
+      "boreholes, which carry the injected stream at the density of this phase");
   params.addParam<VariableName>("temperature",
                                 "The temperature variable.  Supply this, along with 'fp' and "
                                 "'injection_temperature', for a nonisothermal simulation.");

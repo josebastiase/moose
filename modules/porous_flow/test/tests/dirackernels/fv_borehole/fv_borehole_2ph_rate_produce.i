@@ -1,4 +1,8 @@
-# FV two-phase MRST case (gas injection, 1 kg/s) with PorousFlowPeacemanBorehole (bhp control)
+# PorousFlowPeacemanBorehole with control = rate and finite-volume variables: water and a CO2-like
+# gas (immiscible).  The reservoir initially has a uniform gas saturation of 0.3, and the borehole
+# produces 1 kg/s, a mixture of water and gas.  One DiracKernel per phase and component; both
+# contribute to the rate constraint.  The results agree with MRST: see the PorousFlowPeacemanBorehole
+# documentation
 [Mesh]
   type = GeneratedMesh
   dim = 3
@@ -23,7 +27,14 @@
   []
   [sgas]
     type = MooseVariableFVReal
-    initial_condition = 0
+    initial_condition = 0.3
+  []
+  [bhp]
+    # bottomhole pressure, solved fully coupled with ppwater and sgas
+    family = SCALAR
+    order = FIRST
+    # starting guess: hydrostatic pressure at the bottom point
+    initial_condition = 1.0025E7
   []
 []
 
@@ -72,29 +83,55 @@
 []
 
 [DiracKernels]
+  [bh_water]
+    type = PorousFlowPeacemanBorehole
+    variable = ppwater
+    point_file = fv_borehole.bh
+    unit_weight = '0 0 -1E4'
+    use_mobility = true
+    control = rate
+    bottom_hole_pressure = bhp
+    rate = rate
+    SumQuantityUO = bh_water_outflow
+    fluid_phase = 0
+    mass_fraction_component = 0
+  []
   [bh_gas]
     type = PorousFlowPeacemanBorehole
     variable = sgas
-    SumQuantityUO = bh_gas_outflow
     point_file = fv_borehole.bh
-    fluid_phase = 1
-    mass_fraction_component = 1
     unit_weight = '0 0 -1E4'
     use_mobility = true
-    bottom_p_or_t = 1.015E7
-    character = -1
+    control = rate
+    bottom_hole_pressure = bhp
+    rate = rate
+    SumQuantityUO = bh_gas_outflow
+    fluid_phase = 1
+    mass_fraction_component = 1
+  []
+[]
+
+[ScalarKernels]
+  [bhp]
+    # The bhp equation (rate - sum of the borehole fluxes = 0) is assembled by the borehole
+    # DiracKernels: this only tells MOOSE that bhp has an equation
+    type = NullScalarKernel
+    variable = bhp
   []
 []
 
 [UserObjects]
+  [bh_water_outflow]
+    type = PorousFlowSumQuantity
+  []
+  [bh_gas_outflow]
+    type = PorousFlowSumQuantity
+  []
   [dictator]
     type = PorousFlowDictator
     porous_flow_vars = 'ppwater sgas'
     number_fluid_phases = 2
     number_fluid_components = 2
-  []
-  [bh_gas_outflow]
-    type = PorousFlowSumQuantity
   []
   [pc]
     type = PorousFlowCapillaryPressureConst
@@ -168,11 +205,15 @@
   [rate]
     # kg/s, positive for production
     type = ParsedFunction
-    expression = '-1'
+    expression = '1'
   []
 []
 
 [Postprocessors]
+  [p_bot]
+    type = ScalarVariable
+    variable = bhp
+  []
   [target_rate]
     type = FunctionValuePostprocessor
     function = rate

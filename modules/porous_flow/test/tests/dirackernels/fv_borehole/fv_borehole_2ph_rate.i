@@ -1,8 +1,7 @@
-# FVPorousFlowPeacemanBorehole with control = rate: water and a CO2-like gas (immiscible), with
-# one DiracKernel per phase and component.  The reservoir is initially full of water and gas is
-# injected at 1 kg/s (the injecting borehole points use injection_phase = 1).  The production
-# test sets an initial gas saturation of 0.3 and a production rate of 1 kg/s, which produces both
-# phases.  The results agree with MRST: see the FVPorousFlowPeacemanBorehole documentation
+# PorousFlowPeacemanBorehole with control = rate and finite-volume variables: water and a CO2-like
+# gas (immiscible).  The reservoir is initially full of water and gas is injected at 1 kg/s.  The
+# injecting borehole is a single DiracKernel for the gas, weighted by the total mobility of the
+# cell.  The results agree with MRST: see the PorousFlowPeacemanBorehole documentation
 [Mesh]
   type = GeneratedMesh
   dim = 3
@@ -83,37 +82,20 @@
 []
 
 [DiracKernels]
-  # One DiracKernel per fluid phase and component, as PorousFlowPeacemanBorehole.  The mass
-  # fractions of water in the gas and of gas in the water are zero, so those two are not needed
-  [bh_water]
-    type = FVPorousFlowPeacemanBorehole
-    variable = ppwater
-    fluid_phase = 0
-    mass_fraction_component = 0
-    control = rate
-    bottom_p = bhp
-    rate = rate
+  [bh_gas]
+    type = PorousFlowPeacemanBorehole
+    variable = sgas
     point_file = fv_borehole.bh
     unit_weight = '0 0 -1E4'
-    character = 1
     use_mobility = true
-    allow_crossflow = true
-    injection_phase = 1
-  []
-  [bh_gas]
-    type = FVPorousFlowPeacemanBorehole
-    variable = sgas
+    control = rate
+    bottom_hole_pressure = bhp
+    rate = rate
+    SumQuantityUO = bh_gas_outflow
     fluid_phase = 1
     mass_fraction_component = 1
-    control = rate
-    bottom_p = bhp
-    rate = rate
-    point_file = fv_borehole.bh
-    unit_weight = '0 0 -1E4'
-    character = 1
-    use_mobility = true
-    allow_crossflow = true
-    injection_phase = 1
+    # injected gas enters with the total mobility of the cell, which contains no gas at first
+    mobility_type = total
   []
 []
 
@@ -127,6 +109,9 @@
 []
 
 [UserObjects]
+  [bh_gas_outflow]
+    type = PorousFlowSumQuantity
+  []
   [dictator]
     type = PorousFlowDictator
     porous_flow_vars = 'ppwater sgas'
