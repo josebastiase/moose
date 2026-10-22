@@ -32,12 +32,16 @@ Q_{\mathrm{target}}(t) - \sum_{\mathrm{DiracKernels}} \sum_{i} Q_{i} = 0 \ ,
 \end{equation}
 which they assemble together: each adds its fluxes, and one of them adds $Q_{\mathrm{target}}$.  `use_mobility = true` is required, so that the fluxes are mass fluxes.  `bottom_p` is solved fully coupled with the PorousFlow variables, so Newton's method converges quadratically.  The `bottom_p` variable needs a `NullScalarKernel` (to declare that it has an equation), and its initial condition is the starting guess for the bottomhole pressure.
 
+With [!param](/DiracKernels/FVPorousFlowPeacemanBorehole/bhp_max), the borehole delivers the rate only while the bottom-hole pressure stays below `bhp_max`; where it would need more, `bottom_p` is held at `bhp_max` and the borehole delivers whatever rate follows.  The constraint is decided once per timestep, so the bottom-hole pressure may exceed `bhp_max` for the timestep in which the limit is first reached.  An injection well in the [Wells](syntax/Wells/index.md) block with `bhp_max` and finite-volume variables is built from these boreholes.
+
 ### Flow direction and injection
 
 By default the borehole is a producer or an injector, as [PorousFlowPeacemanBorehole](PorousFlowPeacemanBorehole.md): if [!param](/DiracKernels/FVPorousFlowPeacemanBorehole/character) is positive fluid only flows out of the porous medium, and if it is negative fluid only flows in.  Two options change this:
 
 - [!param](/DiracKernels/FVPorousFlowPeacemanBorehole/allow_crossflow) `= true` allows fluid to flow in either direction at every borehole point (the sign of `character` is then ignored);
 - with [!param](/DiracKernels/FVPorousFlowPeacemanBorehole/injection_phase) given, the flow direction at each point is decided by the total volumetric flow of all phases, $\sum_{\beta} (k_{\mathrm{r},\beta}/\mu_{\beta}) (P_{\beta} - P_{\mathrm{bot}} - \gamma \cdot (x_{i} - x^{\mathrm{bot}}))$, and at injecting points only the injection phase enters the porous medium, with the total mobility $\rho_{\mathrm{inj}} \sum_{\beta} k_{\mathrm{r},\beta}/\mu_{\beta}$ of the cell.  This allows, for example, gas to be injected into a cell that contains no gas, where the gas relative permeability is zero.
+
+Fluid leaving the porous medium carries the cell's composition.  With [!param](/DiracKernels/FVPorousFlowPeacemanBorehole/injected_mass_fraction), injected fluid instead carries the composition of the injected stream.
 
 ## Example
 

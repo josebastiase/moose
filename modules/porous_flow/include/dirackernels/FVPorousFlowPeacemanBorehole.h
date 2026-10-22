@@ -43,6 +43,8 @@ public:
   FVPorousFlowPeacemanBorehole(const InputParameters & parameters);
 
   virtual void initialSetup() override;
+  virtual void timestepSetup() override;
+  virtual void residualSetup() override;
   virtual void addPoints() override;
   virtual void computeResidual() override;
   virtual void computeJacobian() override;
@@ -54,6 +56,9 @@ public:
 
   /// Number of the bottomhole-pressure scalar variable (rate control only)
   unsigned int bottomPressureVariableNumber() const;
+
+  /// Whether the borehole is holding bhp_max instead of delivering the rate (rate control only)
+  bool clamped() const { return _clamped; }
 
 protected:
   /// Not used: the residuals are assembled from cellOutflow()
@@ -67,6 +72,9 @@ protected:
    * the contribution to the residual of the bottomhole-pressure equation (rate control only)
    */
   void cellOutflow(ADReal & outflow, ADReal & rate_residual);
+
+  /// The flux of the current element, as a contribution to the rate-constraint residual
+  Real _cell_rate_mode = 0.0;
 
   /// Peaceman well constant of borehole point i, which lies in the current element
   Real wellConstant(unsigned int i, const RealTensorValue & perm) const;
@@ -140,6 +148,37 @@ protected:
 
   /// Phase pressures
   const ADMaterialProperty<std::vector<Real>> & _pressure;
+
+  /// Mass fraction of _sp in the injected fluid, used at injecting points instead of the cell's
+  const Function * const _injected_mass_fraction;
+
+  /// The bottomhole pressure the borehole may not exceed (rate control only)
+  const Function * const _bhp_max;
+
+  /// Maximum number of switches between the rate and bhp_max constraints in one timestep
+  const unsigned int _max_swaps;
+
+  /**
+   * The DiracKernel of this borehole that owns the bottomhole-pressure equation: it adds the
+   * prescribed rate, decides whether bhp_max holds, and gathers the rate-constraint residual from
+   * all the DiracKernels of the borehole.  Itself if this DiracKernel is the owner
+   */
+  FVPorousFlowPeacemanBorehole * _owner = nullptr;
+
+  /// Whether the borehole is holding bhp_max (owner only; others ask the owner)
+  bool _clamped = false;
+
+  /// Number of constraint switches in the current timestep (owner only)
+  unsigned int _n_swaps = 0;
+
+  /// Rate-constraint residual (sum of the fluxes minus the rate) of the latest residual evaluation
+  Real _rate_mode_residual = 0.0;
+
+  /// Bottomhole pressure of the latest residual evaluation
+  Real _pbh_last = 0.0;
+
+  /// Decides, once per timestep, whether bhp_max holds (owner only)
+  void updateConstraint();
 
   /// Mass fraction of each component in each phase
   const ADMaterialProperty<std::vector<std::vector<Real>>> * const _mass_fractions;

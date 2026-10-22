@@ -35,6 +35,18 @@ gas into a fully brine-saturated reservoir.  The cost is that the well has no fe
 pressurise the near-well cell without limit if the prescribed rate exceeds what the formation can
 accept.  Supplying `bhp_max` to obtain that feedback is not yet possible and raises an error.
 
+## Finite-volume variables
+
+`[Wells]` works out whether the fluid-component variables are finite-element or finite-volume
+variables, and builds the matching objects.  The point and line sources of a prescribed-rate well
+need no material properties, so they are used as they are.  A well with `bhp_max` is instead
+modelled by one [FVPorousFlowPeacemanBorehole](FVPorousFlowPeacemanBorehole.md) per fluid phase and
+component, which share the bottom-hole pressure, deliver `rate` until `bhp_max` is reached and then
+hold it, deciding this once per timestep as the finite-element borehole does.  Their injecting
+completions inject `injection_phase`, with its density and the total mobility of the cell, and the
+composition given by `injected_mass_fractions`; completions where fluid flows out of the reservoir
+(crossflow) produce the cell's fluid.
+
 ## Sign convention
 
 `rate` is positive in the well's natural sense: a positive rate injects.  Every reported rate and

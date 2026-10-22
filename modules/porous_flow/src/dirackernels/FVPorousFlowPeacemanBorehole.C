@@ -43,6 +43,12 @@ FVPorousFlowPeacemanBorehole::validParams()
       "use_relative_permeability", false, "Multiply the flux by the fluid relative permeability");
   params.addParam<bool>("use_mobility", false, "Multiply the flux by the fluid mobility");
   params.addCoupledVar("multiplying_var", 1.0, "Fluxes will be multiplied by this variable");
+  params.addParam<FunctionName>(
+      "injected_mass_fraction",
+      "Mass fraction of mass_fraction_component in the fluid injected at injecting points.  Fluid "
+      "leaving the porous medium carries the composition of the cell, but injected fluid carries "
+      "the composition of the injected stream, which the reservoir does not know.  Without this "
+      "parameter the cell's mass fraction is used in both directions");
 
   // As PorousFlowPeacemanBorehole
   params.addRequiredParam<FunctionName>(
@@ -92,6 +98,20 @@ FVPorousFlowPeacemanBorehole::validParams()
       "the borehole fluxes = 0) is assembled by the DiracKernels of this borehole, so it "
       "only needs a NullScalarKernel.  Its initial condition is the starting guess");
 
+  params.addParam<FunctionName>(
+      "bhp_max",
+      "The bottomhole pressure this borehole may not exceed (control = rate).  Where delivering "
+      "'rate' would need more than this, the borehole holds this pressure instead and delivers "
+      "whatever rate follows.  The constraint is decided once per timestep, so the bottomhole "
+      "pressure may exceed bhp_max for the timestep in which the limit is first reached.  All the "
+      "DiracKernels sharing bottom_p must give the same bhp_max");
+  params.addParam<unsigned int>(
+      "max_constraint_swaps",
+      5,
+      "The number of times in one timestep the borehole may switch between delivering 'rate' and "
+      "holding 'bhp_max'.  Once this many switches have been made the borehole keeps whichever "
+      "constraint it holds until the next timestep");
+
   // Flow direction and injection
   params.addParam<bool>(
       "allow_crossflow",
@@ -138,6 +158,10 @@ FVPorousFlowPeacemanBorehole::FVPorousFlowPeacemanBorehole(const InputParameters
     _adds_rate(false),
     _multiplying_var(adCoupledValue("multiplying_var")),
     _pressure(getADMaterialProperty<std::vector<Real>>("PorousFlow_porepressure_qp")),
+    _injected_mass_fraction(
+        isParamValid("injected_mass_fraction") ? &getFunction("injected_mass_fraction") : nullptr),
+    _bhp_max(isParamValid("bhp_max") ? &getFunction("bhp_max") : nullptr),
+    _max_swaps(getParam<unsigned int>("max_constraint_swaps")),
     _mass_fractions(_use_mass_fraction ? &getADMaterialProperty<std::vector<std::vector<Real>>>(
                                              "PorousFlow_mass_frac_qp")
                                        : nullptr),
@@ -164,8 +188,15 @@ FVPorousFlowPeacemanBorehole::FVPorousFlowPeacemanBorehole(const InputParameters
                "The Dictator proclaims that the maximum phase index in this simulation is ",
                _dictator.numPhases() - 1);
 
+  if (_injected_mass_fraction && !_use_mass_fraction)
+    paramError("injected_mass_fraction",
+               "injected_mass_fraction needs mass_fraction_component: it replaces the cell's "
+               "mass fraction of that component at injecting points");
+
   if (_control == Control::bhp)
   {
+    if (_bhp_max)
+      paramError("bhp_max", "bhp_max is only used with control = rate");
     if (!_bottom_p_function)
       paramError("bottom_p_or_t", "bottom_p_or_t must be given for control = bhp");
     if (_rate || _bottom_p_var)
@@ -233,10 +264,69 @@ FVPorousFlowPeacemanBorehole::initialSetup()
                    " and ",
                    bh->name(),
                    " share bottom_p, so they are one borehole and must use the same rate");
+      const auto bhp_max_name = [](const FVPorousFlowPeacemanBorehole & k)
+      { return k.isParamValid("bhp_max") ? k.getParam<FunctionName>("bhp_max") : FunctionName(); };
+      if (bhp_max_name(*bh) != bhp_max_name(*this))
+        paramError("bhp_max",
+                   "The DiracKernels ",
+                   name(),
+                   " and ",
+                   bh->name(),
+                   " share bottom_p, so they are one borehole and must use the same bhp_max");
       if (!adder)
         adder = bh;
     }
     _adds_rate = (adder == this);
+    // The owner of the bottomhole-pressure equation also owns the bhp_max decision, which all the
+    // DiracKernels of the borehole must share
+    _owner = const_cast<FVPorousFlowPeacemanBorehole *>(adder);
+  }
+}
+
+void
+FVPorousFlowPeacemanBorehole::timestepSetup()
+{
+  PorousFlowLineGeometry::timestepSetup();
+  if (!_bhp_max || _owner != this)
+    return;
+
+  // The constraint is decided here, once per timestep, so the equation being solved never changes
+  // part way through a solve.  The rate-constraint residual left by the last residual evaluation
+  // of the previous timestep, summed over the borehole's DiracKernels and over the processors,
+  // decides it
+  _n_swaps = 0;
+  _communicator.sum(_rate_mode_residual);
+  updateConstraint();
+}
+
+void
+FVPorousFlowPeacemanBorehole::residualSetup()
+{
+  PorousFlowLineGeometry::residualSetup();
+  if (_owner == this)
+    _rate_mode_residual = 0.0;
+}
+
+void
+FVPorousFlowPeacemanBorehole::updateConstraint()
+{
+  // An operating point sitting on the limit could otherwise switch back and forth for ever
+  if (_n_swaps >= _max_swaps)
+    return;
+
+  const Real bhp_max = _bhp_max->value(_t, _bottom_point);
+  if (!_clamped && _pbh_last > bhp_max)
+  {
+    // Delivering the rate needs a pressure the borehole is not allowed to reach
+    _clamped = true;
+    ++_n_swaps;
+  }
+  else if (_clamped && _rate_mode_residual < 0.0)
+  {
+    // The outflow falls as the bottomhole pressure rises, so a negative rate-constraint residual
+    // at the limit means the rate would be met below it: the limit no longer binds
+    _clamped = false;
+    ++_n_swaps;
   }
 }
 
@@ -347,7 +437,13 @@ FVPorousFlowPeacemanBorehole::pointOutflow(unsigned int i)
       multiplier *= _density[_qp][_ph] * mobility;
   }
   if (_use_mass_fraction)
-    multiplier *= (*_mass_fractions)[_qp][_ph][_sp];
+  {
+    // Injected fluid carries the composition of the injected stream, outflow that of the cell
+    if (!producing && _injected_mass_fraction)
+      multiplier *= _injected_mass_fraction->value(_t, pt);
+    else
+      multiplier *= (*_mass_fractions)[_qp][_ph][_sp];
+  }
 
   return multiplier * (_pressure[_qp][_ph] - p_conn);
 }
@@ -357,6 +453,8 @@ FVPorousFlowPeacemanBorehole::cellOutflow(ADReal & outflow, ADReal & rate_residu
 {
   outflow = 0.0;
   rate_residual = 0.0;
+  _cell_rate_mode = 0.0;
+  const bool clamped = _control == Control::rate && _owner && _owner->clamped();
   for (_qp = 0; _qp < _qrule->n_points(); _qp++)
   {
     _current_point = _physical_point[_qp];
@@ -369,11 +467,28 @@ FVPorousFlowPeacemanBorehole::cellOutflow(ADReal & outflow, ADReal & rate_residu
     outflow += q;
     if (_control == Control::rate)
     {
-      // rate - sum of the fluxes, with the prescribed rate added once, at the bottom point.  This
-      // sign gives d(residual)/d(bottom_p) > 0
-      rate_residual -= q;
-      if (_adds_rate && i + 1 == _zs.size())
-        rate_residual += _rate->value(_t, _bottom_point);
+      const bool bottom = _adds_rate && i + 1 == _zs.size();
+      // The rate-constraint residual (sum of the fluxes - rate) is recorded even while bhp_max is
+      // held, because it is what says when the limit stops binding
+      _cell_rate_mode += MetaPhysicL::raw_value(q);
+      if (bottom)
+        _cell_rate_mode -= _rate->value(_t, _bottom_point);
+
+      if (clamped)
+      {
+        // The limit has taken over: the bottomhole pressure is pinned to bhp_max, an equation
+        // assembled once, at the bottom point
+        if (bottom)
+          rate_residual += (*_bottom_p_value)[0] - _bhp_max->value(_t, _bottom_point);
+      }
+      else
+      {
+        // rate - sum of the fluxes, with the prescribed rate added once, at the bottom point.
+        // This sign gives d(residual)/d(bottom_p) > 0
+        rate_residual -= q;
+        if (bottom)
+          rate_residual += _rate->value(_t, _bottom_point);
+      }
     }
   }
 }
@@ -383,6 +498,11 @@ FVPorousFlowPeacemanBorehole::computeResidual()
 {
   ADReal outflow, rate_residual;
   cellOutflow(outflow, rate_residual);
+  if (_owner && _bhp_max)
+  {
+    _owner->_rate_mode_residual += _cell_rate_mode;
+    _owner->_pbh_last = MetaPhysicL::raw_value((*_bottom_p_value)[0]);
+  }
 
   // A finite-volume variable has one dof per cell, whose test function is 1 in the cell
   addResiduals(_assembly,
@@ -421,6 +541,11 @@ FVPorousFlowPeacemanBorehole::computeResidualAndJacobian()
 {
   ADReal outflow, rate_residual;
   cellOutflow(outflow, rate_residual);
+  if (_owner && _bhp_max)
+  {
+    _owner->_rate_mode_residual += _cell_rate_mode;
+    _owner->_pbh_last = MetaPhysicL::raw_value((*_bottom_p_value)[0]);
+  }
 
   addResidualsAndJacobian(
       _assembly, std::array<ADReal, 1>{{outflow}}, _var.dofIndices(), _var.scalingFactor());

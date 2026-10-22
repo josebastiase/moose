@@ -27,6 +27,12 @@ PorousFlowInjectionWell::validParams()
       "injected_mass_fractions",
       "The mass fraction of each fluid component in the injected stream, in fluid-component order. "
       " Must have one entry per fluid component and sum to 1.");
+  params.addParam<unsigned int>(
+      "injection_phase",
+      0,
+      "The fluid phase of the injected stream.  Where the variables are finite-volume variables "
+      "and 'bhp_max' is given, the well is a FVPorousFlowPeacemanBorehole: its injecting "
+      "completions inject this phase, with its density and the total mobility of the cell");
   params.addParam<VariableName>("temperature",
                                 "The temperature variable.  Supply this, along with 'fp' and "
                                 "'injection_temperature', for a nonisothermal simulation.");
